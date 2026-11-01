@@ -31,7 +31,7 @@ Skrip Tampermonkey ini berfungsi untuk merekam dan mengunduh secara otomatis med
 // ==UserScript==
 // @name         Auto Record Playing Media (Stream Support)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Merekam audio/video (termasuk stream) yang sedang diputar lalu mengunduhnya saat dijeda/selesai
 // @author       Anda
 // @match        *://*/*
@@ -44,47 +44,60 @@ Skrip Tampermonkey ini berfungsi untuk merekam dan mengunduh secara otomatis med
     document.addEventListener('play', function(event) {
         const media = event.target;
 
-        if ((media.tagName === 'AUDIO' || media.tagName === 'VIDEO') && !media.dataset.isRecording) {
+        if ((media.tagName === 'AUDIO' || media.tagName === 'VIDEO') && media.dataset.isRecording !== 'true') {
+
             try {
-                const stream = media.captureStream ? media.captureStream() : media.mozCaptureStream();
-                
+                const stream = media.captureStream ? media.captureStream() : (media.mozCaptureStream ? media.mozCaptureStream() : null);
+
                 if (!stream) {
-                    console.log('Peramban tidak mendukung captureStream pada elemen ini.');
+                    console.warn('[AutoRecord] Peramban tidak mendukung captureStream pada elemen ini.');
                     return;
                 }
 
                 media.dataset.isRecording = 'true';
-                
+
+                const isAudioOnly = media.tagName === 'AUDIO' || stream.getVideoTracks().length === 0;
+                const mimeType = isAudioOnly ? 'audio/webm' : 'video/webm';
+                const fileExt = isAudioOnly ? '.webm' : '.webm';
+
                 const recorder = new MediaRecorder(stream);
                 const chunks = [];
 
                 recorder.ondataavailable = function(e) {
-                    if (e.data.size > 0) chunks.push(e.data);
+                    if (e.data && e.data.size > 0) {
+                        chunks.push(e.data);
+                    }
                 };
 
                 recorder.onstop = function() {
-                    media.dataset.isRecording = 'false'; 
+                    media.dataset.isRecording = 'false';
+
                     if (chunks.length === 0) return;
 
-                    const blob = new Blob(chunks, { type: 'video/webm' }); 
+                    const blob = new Blob(chunks, { type: mimeType });
                     const url = URL.createObjectURL(blob);
-                    const filename = 'Rekaman_Media_' + Date.now() + '.webm';
-                    
-                    console.log('Menyimpan rekaman:', filename);
+                    const filename = `Rekaman_${isAudioOnly ? 'Audio' : 'Video'}_${Date.now()}${fileExt}`;
+
+                    console.log('[AutoRecord] Menyimpan rekaman:', filename);
 
                     GM_download({
                         url: url,
                         name: filename,
-                        onload: () => URL.revokeObjectURL(url), 
-                        onerror: (err) => console.error('Gagal mengunduh:', err)
+                        onload: () => URL.revokeObjectURL(url),
+                        onerror: (err) => {
+                            console.error('[AutoRecord] Gagal mengunduh:', err);
+                            URL.revokeObjectURL(url);
+                        }
                     });
                 };
 
                 recorder.start();
-                console.log('Mulai merekam media...');
+                console.log('[AutoRecord] Mulai merekam media...');
 
                 const stopRecording = function() {
-                    if (recorder.state !== 'inactive') recorder.stop();
+                    if (recorder.state !== 'inactive') {
+                        recorder.stop();
+                    }
                     media.removeEventListener('pause', stopRecording);
                     media.removeEventListener('ended', stopRecording);
                 };
@@ -93,7 +106,7 @@ Skrip Tampermonkey ini berfungsi untuk merekam dan mengunduh secara otomatis med
                 media.addEventListener('ended', stopRecording);
 
             } catch (err) {
-                console.error('Gagal merekam media. Ini biasanya karena batasan CORS. Detail:', err);
+                console.error('[AutoRecord] Gagal merekam media (kemungkinan kendala CORS):', err);
                 media.dataset.isRecording = 'false';
             }
         }
